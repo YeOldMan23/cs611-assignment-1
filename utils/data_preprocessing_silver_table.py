@@ -80,6 +80,15 @@ def parse_changed_credit_limit(value : str):
         return cur_value
     except:
         return 0.0
+    
+def parse_occupation(value : str):
+    """
+    Unknown occupation, parse all empty strings
+    """
+    if "_" in value:
+        return "Unknown"
+    else:
+        return value
 
 
 def get_true_number_of_loan(loan_type : str):
@@ -95,6 +104,7 @@ parse_credit_mix_udf = F.udf(parse_credit_mix, IntegerType())
 parse_credit_history_age_udf = F.udf(parse_credit_history_age, FloatType())
 parse_payment_min_amount_udf = F.udf(parse_payment_min_amount, BooleanType())
 parse_changed_credit_limit_udf = F.udf(parse_changed_credit_limit, FloatType())
+parse_occupation_udf = F.udf(parse_occupation, StringType())
 
 # Repair functions
 get_true_number_of_loan_udf = F.udf(get_true_number_of_loan, IntegerType())
@@ -134,11 +144,9 @@ def process_silver_table_loan_daily(bronze_loan_file : str, silver_table_dir : s
     df = df.withColumn("dpd", F.when(col("overdue_amt") > 0.0, F.datediff(col("snapshot_date"), col("first_missed_date"))).otherwise(0).cast(IntegerType()))
 
     # save silver table - IRL connect to database to write
-    partition_name = "silver_lms_loan_daily_" + date.replace('-','_') + '.parquet'
+    partition_name = "silver_lms_loan_daily_" + date + '.csv'
     filepath = os.path.join(silver_table_dir, partition_name)
-    df.write.mode("overwrite").parquet(filepath)
-    df.toPandas().to_parquet(filepath,
-              compression='gzip')
+    df.toPandas().to_csv(filepath, index=False)
     print('saved to:', filepath)
 
 def process_silver_table_feature_financials(bronze_feature_financials : str, silver_table_dir : str, date : str, spark : SparkSession):
@@ -177,7 +185,7 @@ def process_silver_table_feature_financials(bronze_feature_financials : str, sil
         if column == "Type_of_Loan":
             df = df.withColumn(column, parse_type_of_loan_udf(col(column)).cast(new_type))
         elif column == "Credit_Mix":
-            df = df.withColumn(column, parse_changed_credit_limit_udf(col(column)).cast(new_type))
+            df = df.withColumn(column, parse_credit_mix_udf(col(column)).cast(new_type))
         elif column == "Credit_History_Age":
             df = df.withColumn(column, parse_credit_history_age_udf(col(column)).cast(new_type))
         elif column == "Payment_of_Min_Amount":
@@ -189,8 +197,8 @@ def process_silver_table_feature_financials(bronze_feature_financials : str, sil
             df = df.withColumn(column, parse_int_udf(col(column)).cast(new_type))
         elif new_type == FloatType():
             df = df.withColumn(column, parse_float_udf(col(column)).cast(new_type))
-
-        df = df.withColumn(column, col(column).cast(new_type))
+        else:
+            df = df.withColumn(column, col(column).cast(new_type))
 
     # We can do some repair on the number of loans by checking the values from the loan types
     # and replacing the value inside depending on the number of loans
@@ -202,13 +210,14 @@ def process_silver_table_feature_financials(bronze_feature_financials : str, sil
 
     # Remove anomalous data based on certain values
     # e.g. > 50 credit cards, more than 50 loans, CUS_0x1140 where monthly salary 914 but yearly salary is 14 millions
-    df = df.filter(df.Outstanding_Debt >= 0)
-    df = df.filter(df.Annual_Income >= 0)
-    df = df.filter(df.Monthly_Inhand_Salary >= 0)
-    df = df.filter((df.Num_Bank_Accounts <= 20) & (df.Num_Bank_Accounts > 0))
-    df = df.filter((df.Num_Credit_Card <= 20) & (df.Num_Credit_Card >= 0))
-    df = df.filter((df.Num_of_Loan <= 20) & (df.Num_of_Loan >= 0))
-    df = df.filter((df.Interest_Rate <= 600) & (df.Interest_Rate >= 0)) # According to online, max rating is ~600%
+    # df = df.filter(col("Outstanding_Debt") >= 0)
+    df = df.filter(col("Annual_Income") >= 0)
+    df = df.filter(col("Monthly_Inhand_Salary") >= 0)
+    df = df.filter((col("Num_Bank_Accounts") <= 20) & (col("Num_Bank_Accounts") > 0))
+    df = df.filter((col("Num_Credit_Card") <= 20) & (col("Num_Credit_Card") >= 0))
+    df = df.filter((col("Num_of_Loan") <= 20) & (col("Num_of_Loan") >= 0))
+    df = df.filter((col("Interest_Rate") <= 600) & (col("Interest_Rate") >= 0)) # According to online, max rating is ~600%
+    df = df.filter((col("Monthly_Inhand_Salary") * 24 < col("Annual_Income")))
 
     # Remove filter columns, then change loan type to counter column
     df_split = df.withColumn("loan_type_array", split("Type_of_Loan", ","))
@@ -225,11 +234,10 @@ def process_silver_table_feature_financials(bronze_feature_financials : str, sil
     # We then can count the number of each time of loan based off the Num_of_loan column
 
     # save silver table - IRL connect to database to write
-    partition_name = "silver_feature_finanicals_" + date + '.parquet'
+    partition_name = "silver_feature_finanicals_" + date + '.csv'
     filepath = os.path.join(silver_table_dir, partition_name)
-    df.write.mode("overwrite").parquet(filepath)
-    df.toPandas().to_parquet(filepath,
-              compression='gzip')
+
+    df.toPandas().to_csv(filepath, index=False)
     print('saved to:', filepath)
     
     return df
@@ -270,11 +278,10 @@ def process_silver_table_features_clickstream(bronze_feature_clickstream : str, 
         df = df.withColumn(column, col(column).cast(new_type))
 
     # save silver table - IRL connect to database to write
-    partition_name = "silver_feature_clickstream_" + date + '.parquet'
+    partition_name = "silver_feature_clickstream_" + date + '.csv'
     filepath = os.path.join(silver_table_dir, partition_name)
-    df.write.mode("overwrite").parquet(filepath)
-    df.toPandas().to_parquet(filepath,
-              compression='gzip')
+
+    df.toPandas().to_csv(filepath)
     print('saved to:', filepath)
 
 def process_silver_table_features_attributes(bronze_feature_attributes : str, silver_table_dir : str, date : str, spark : SparkSession):
@@ -294,15 +301,16 @@ def process_silver_table_features_attributes(bronze_feature_attributes : str, si
     }
 
     for column, new_type in column_type_map.items():
-        df = df.withColumn(column, col(column).cast(new_type))
-
-    # Handle empty occupation convert to "Unknown"
-    # TODO
+        if new_type == IntegerType():
+            df = df.withColumn(column, parse_int_udf(col(column)).cast(new_type))
+        if column == "Occupation":
+            df = df.withColumn(column, parse_occupation_udf(col(column)).cast(new_type))
+        else:
+            df = df.withColumn(column, col(column).cast(new_type))
     
     # save silver table - IRL connect to database to write
-    partition_name = "silver_feature_attributes_" + date + '.parquet'
+    partition_name = "silver_feature_attributes_" + date + '.csv'
     filepath = os.path.join(silver_table_dir, partition_name)
-    df.write.mode("overwrite").parquet(filepath)
-    df.toPandas().to_parquet(filepath,
-              compression='gzip')
+
+    df.toPandas().to_csv(filepath)
     print('saved to:', filepath)
