@@ -4,7 +4,7 @@ import re
 
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, split, explode, trim, lower, when
 from pyspark.sql.types import StringType, IntegerType, FloatType, DateType, BooleanType
 
 def parse_type_of_loan(value : str):
@@ -134,19 +134,19 @@ def process_silver_table_loan_daily(bronze_loan_file : str, silver_table_dir : s
     df = df.withColumn("dpd", F.when(col("overdue_amt") > 0.0, F.datediff(col("snapshot_date"), col("first_missed_date"))).otherwise(0).cast(IntegerType()))
 
     # save silver table - IRL connect to database to write
-    partition_name = "silver_loan_daily_" + date.replace('-','_') + '.parquet'
+    partition_name = "silver_lms_loan_daily_" + date.replace('-','_') + '.parquet'
     filepath = os.path.join(silver_table_dir, partition_name)
     df.write.mode("overwrite").parquet(filepath)
     df.toPandas().to_parquet(filepath,
               compression='gzip')
     print('saved to:', filepath)
 
-def process_silver_table_feature_financials(bronze_loan_file : str, silver_table_dir : str, date : str, spark : SparkSession):
+def process_silver_table_feature_financials(bronze_feature_financials : str, silver_table_dir : str, date : str, spark : SparkSession):
     """
     Process Feature finanicals
     """
-    df = spark.read.csv(bronze_loan_file, header=True, inferSchema=True)
-    print(f"Loaded {bronze_loan_file}, row count {df.count()}")
+    df = spark.read.csv(bronze_feature_financials, header=True, inferSchema=True)
+    print(f"Loaded {bronze_feature_financials}, row count {df.count()}")
 
     column_type_map = {
         "Customer_ID": StringType(),
@@ -203,10 +203,106 @@ def process_silver_table_feature_financials(bronze_loan_file : str, silver_table
     # Remove anomalous data based on certain values
     # e.g. > 50 credit cards, more than 50 loans, CUS_0x1140 where monthly salary 914 but yearly salary is 14 millions
     df = df.filter(df.Outstanding_Debt >= 0)
+    df = df.filter(df.Annual_Income >= 0)
+    df = df.filter(df.Monthly_Inhand_Salary >= 0)
     df = df.filter((df.Num_Bank_Accounts <= 20) & (df.Num_Bank_Accounts > 0))
     df = df.filter((df.Num_Credit_Card <= 20) & (df.Num_Credit_Card >= 0))
     df = df.filter((df.Num_of_Loan <= 20) & (df.Num_of_Loan >= 0))
     df = df.filter((df.Interest_Rate <= 600) & (df.Interest_Rate >= 0)) # According to online, max rating is ~600%
 
-    # Remove filter columns, then change loan type to counter columns
+    # Remove filter columns, then change loan type to counter column
+    df_split = df.withColumn("loan_type_array", split("Type_of_Loan", ","))
+    df_exploded = df_split.withColumn("loan_type", explode("loan_type_array"))
+    df_normalized = df_exploded.withColumn("loan_type", trim(lower("loan_type")))
+    loan_types = [row['loan_type'] for row in df_normalized.select("loan_type").distinct().collect()]
+
+    for loan in loan_types:
+        df = df.withColumn(
+            loan,
+            when(lower(col("Type_of_Loan")).contains(loan), 1).otherwise(0)
+        )
     
+    # We then can count the number of each time of loan based off the Num_of_loan column
+
+    # save silver table - IRL connect to database to write
+    partition_name = "silver_feature_finanicals_" + date + '.parquet'
+    filepath = os.path.join(silver_table_dir, partition_name)
+    df.write.mode("overwrite").parquet(filepath)
+    df.toPandas().to_parquet(filepath,
+              compression='gzip')
+    print('saved to:', filepath)
+    
+    return df
+
+def process_silver_table_features_clickstream(bronze_feature_clickstream : str, silver_table_dir : str, date : str, spark : SparkSession):
+    """
+    Process Feature Clickstream
+    """
+    df = spark.read.csv(bronze_feature_clickstream, header=True, inferSchema=True)
+    print(f"Loaded {bronze_feature_clickstream}, row count {df.count()}")
+
+    column_type_map = {
+        "fe_1": FloatType(),
+        "fe_2": FloatType(),
+        "fe_3": FloatType(),
+        "fe_4": FloatType(),
+        "fe_5": FloatType(),
+        "fe_6": FloatType(),
+        "fe_7": FloatType(),
+        "fe_8": FloatType(),
+        "fe_9": FloatType(),
+        "fe_10": FloatType(),
+        "fe_11": FloatType(),
+        "fe_12": FloatType(),
+        "fe_13": FloatType(),
+        "fe_14": FloatType(),
+        "fe_15": FloatType(),
+        "fe_16": FloatType(),
+        "fe_17": FloatType(),
+        "fe_18": FloatType(),
+        "fe_19": FloatType(),
+        "fe_20": FloatType(),
+        "Customer_ID": StringType(),
+        "snapshot_date": DateType()
+    }
+
+    for column, new_type in column_type_map.items():
+        df = df.withColumn(column, col(column).cast(new_type))
+
+    # save silver table - IRL connect to database to write
+    partition_name = "silver_feature_clickstream_" + date + '.parquet'
+    filepath = os.path.join(silver_table_dir, partition_name)
+    df.write.mode("overwrite").parquet(filepath)
+    df.toPandas().to_parquet(filepath,
+              compression='gzip')
+    print('saved to:', filepath)
+
+def process_silver_table_features_attributes(bronze_feature_attributes : str, silver_table_dir : str, date : str, spark : SparkSession):
+    """
+    Process Feature Attributes
+    """
+    df = spark.read.csv(bronze_feature_attributes, header=True, inferSchema=True)
+    print(f"Loaded {bronze_feature_attributes}, row count {df.count()}")
+
+    column_type_map = {
+        "Customer_ID": StringType(),
+        "Name": StringType(),
+        "Age": IntegerType(),
+        "SSN": StringType(),
+        "Occupation": StringType(),
+        "snapshot_date": DateType()
+    }
+
+    for column, new_type in column_type_map.items():
+        df = df.withColumn(column, col(column).cast(new_type))
+
+    # Handle empty occupation convert to "Unknown"
+    # TODO
+    
+    # save silver table - IRL connect to database to write
+    partition_name = "silver_feature_attributes_" + date + '.parquet'
+    filepath = os.path.join(silver_table_dir, partition_name)
+    df.write.mode("overwrite").parquet(filepath)
+    df.toPandas().to_parquet(filepath,
+              compression='gzip')
+    print('saved to:', filepath)
