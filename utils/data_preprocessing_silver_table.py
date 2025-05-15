@@ -20,7 +20,7 @@ def parse_int(value : str):
     """
     Remove the weird values from number of loan
     """
-    if value.isdigit():
+    if type(value) == int:
         return int(value)
     else:
         digit_match = re.search(r'\d+', value)
@@ -30,10 +30,20 @@ def parse_int(value : str):
             return None
         
 def parse_float(s):
-    match = re.search(r"[-+]?\d*\.\d+|\d+", s)
+    if s is None:
+        return None
+    match = re.search(r"[-+]?\d*\.\d+|\d+", str(s))
     if match:
         return float(match.group())
     return None
+
+def parse_payment_behaviour(value : str):
+    if value is None:
+        return None
+    if "payment" not in str(value):
+        return "unknown"
+    else:
+        return lower(str(value))
         
 
 def parse_credit_mix(value : str):
@@ -105,6 +115,7 @@ parse_credit_history_age_udf = F.udf(parse_credit_history_age, FloatType())
 parse_payment_min_amount_udf = F.udf(parse_payment_min_amount, BooleanType())
 parse_changed_credit_limit_udf = F.udf(parse_changed_credit_limit, FloatType())
 parse_occupation_udf = F.udf(parse_occupation, StringType())
+parse_payment_behaviour_udf = F.udf(parse_payment_behaviour, StringType())
 
 # Repair functions
 get_true_number_of_loan_udf = F.udf(get_true_number_of_loan, IntegerType())
@@ -211,6 +222,7 @@ def process_silver_table_feature_financials(bronze_feature_financials : str, sil
     # Remove anomalous data based on certain values
     # e.g. > 50 credit cards, more than 50 loans, CUS_0x1140 where monthly salary 914 but yearly salary is 14 millions
     # df = df.filter(col("Outstanding_Debt") >= 0)
+    print("---------Filtering Anomalous Data------------")
     df = df.filter(col("Annual_Income") >= 0)
     df = df.filter(col("Monthly_Inhand_Salary") >= 0)
     df = df.filter((col("Num_Bank_Accounts") <= 20) & (col("Num_Bank_Accounts") > 0))
@@ -220,20 +232,24 @@ def process_silver_table_feature_financials(bronze_feature_financials : str, sil
     df = df.filter((col("Monthly_Inhand_Salary") * 24 < col("Annual_Income")))
 
     # Remove filter columns, then change loan type to counter column
-    df_split = df.withColumn("loan_type_array", split("Type_of_Loan", ","))
-    df_exploded = df_split.withColumn("loan_type", explode("loan_type_array"))
-    df_normalized = df_exploded.withColumn("loan_type", trim(lower("loan_type")))
-    loan_types = [row['loan_type'] for row in df_normalized.select("loan_type").distinct().collect()]
+    print("---------Extracting Loan Data------------")
+    # df_split = df.withColumn("loan_type_array", split("Type_of_Loan", ","))
+    # df_exploded = df_split.withColumn("loan_type", explode("loan_type_array"))
+    # df_normalized = df_exploded.withColumn("loan_type", trim(lower("loan_type")))
+    # df_normalized.show(10)
+    # loan_types = [row.loan_type for row in df_normalized.select("loan_type").distinct().collect()]
 
-    for loan in loan_types:
-        df = df.withColumn(
-            loan,
-            when(lower(col("Type_of_Loan")).contains(loan), 1).otherwise(0)
-        )
+    # for loan in loan_types:
+    #     df = df.withColumn(
+    #         loan,
+    #         when(lower(col("Type_of_Loan")).contains(loan), 1).otherwise(0)
+    #     )
     
     # We then can count the number of each time of loan based off the Num_of_loan column
 
     # save silver table - IRL connect to database to write
+    print("---------Writing Pandas File------------")
+    df.show(5)
     partition_name = "silver_feature_finanicals_" + date + '.csv'
     filepath = os.path.join(silver_table_dir, partition_name)
 
