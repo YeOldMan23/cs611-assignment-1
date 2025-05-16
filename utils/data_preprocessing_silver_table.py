@@ -1,20 +1,14 @@
 import pyspark
 import os
 import re
+import pandas as pd
+import numpy as np
+from collections import Counter
 
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as F
 from pyspark.sql.functions import col, split, explode, trim, lower, when
 from pyspark.sql.types import StringType, IntegerType, FloatType, DateType, BooleanType
-
-def parse_type_of_loan(value : str):
-    """
-    Parse the type of loan that was used
-    """
-    # Remove all spaces, instances of the word "and" and "loan"
-    value = value.replace(" ", "").replace("and", "").replace("loan", "")
-
-    return value
 
 def parse_int(value : str):
     """
@@ -37,88 +31,13 @@ def parse_float(s):
         return float(match.group())
     return None
 
-def parse_payment_behaviour(value : str):
-    if value is None:
-        return None
-    if "payment" not in str(value):
-        return "unknown"
-    else:
-        return lower(str(value))
-        
-
-def parse_credit_mix(value : str):
-    if value == "Bad":
-        return 0
-    elif value == "Good":
-        return 2
-    elif value == "Standard":
-        return 1
-    else:
-        # No credit
-        return -1  # Other categories
-
-def parse_credit_history_age(value : str):
-    """
-    Value is in years and months, convert to float of years
-    """
-    # Use regex to extract years and months
-    years_match = re.search(r'(\d+)\s*Years?', value)
-    months_match = re.search(r'(\d+)\s*Months?', value)
-
-    years = int(years_match.group(1)) if years_match else 0
-    months = int(months_match.group(1)) if months_match else 0
-    
-    # Convert months into fraction of a year and add to years
-    return years + (months / 12.0)
-
-def parse_payment_min_amount(value : str):
-    """
-    Yes or no, change to 1 or 0
-    """
-    if value == "Yes":
-        return True
-    else:
-        # There is an additional column data called "NM", which may mean "Not Made"
-        return False
-
-def parse_changed_credit_limit(value : str):
-    """
-    Some Null values, just change to 0
-    """
-    try:
-        cur_value = float(value)
-        return cur_value
-    except:
-        return 0.0
-    
-def parse_occupation(value : str):
-    """
-    Unknown occupation, parse all empty strings
-    """
-    if "_" in value:
-        return "Unknown"
-    else:
-        return value
-
-
-def get_true_number_of_loan(loan_type : str):
-    number_of_loans = len(loan_type.split(","))
-
-    return number_of_loans
-
 # Parsing functions
-parse_type_of_loan_udf = F.udf(parse_type_of_loan, StringType())
 parse_int_udf = F.udf(parse_int, IntegerType())
 parse_float_udf = F.udf(parse_float, FloatType())
-parse_credit_mix_udf = F.udf(parse_credit_mix, IntegerType())
-parse_credit_history_age_udf = F.udf(parse_credit_history_age, FloatType())
-parse_payment_min_amount_udf = F.udf(parse_payment_min_amount, BooleanType())
-parse_changed_credit_limit_udf = F.udf(parse_changed_credit_limit, FloatType())
-parse_occupation_udf = F.udf(parse_occupation, StringType())
-parse_payment_behaviour_udf = F.udf(parse_payment_behaviour, StringType())
 
-# Repair functions
-get_true_number_of_loan_udf = F.udf(get_true_number_of_loan, IntegerType())
+"""
+Silver Loan Daily
+"""
 
 def process_silver_table_loan_daily(bronze_loan_file : str, silver_table_dir : str, date : str, spark : SparkSession):
     """
@@ -157,106 +76,134 @@ def process_silver_table_loan_daily(bronze_loan_file : str, silver_table_dir : s
     # save silver table - IRL connect to database to write
     partition_name = "silver_lms_loan_daily_" + date + '.csv'
     filepath = os.path.join(silver_table_dir, partition_name)
+    print("Saving File {} row count {}".format(filepath, df.count()))
+
+    # Convert to pandas and save as CSV
     df.toPandas().to_csv(filepath, index=False)
-    print('saved to:', filepath)
+
+"""
+Silver Feature Financials
+"""
+
+def extract_float(val):
+    if pd.isna(val):
+        return np.nan
+    match = re.search(r"\d+(\.\d+)?", str(val).replace(",", ""))
+    if match:
+        return float(match.group())
+    return np.nan
+
+def extract_int(val):
+    if pd.isna(val):
+        return np.nan
+    match = re.search(r"\d+", str(val).replace(",", ""))
+    if match:
+        return int(match.group())
+    return np.nan
+
+def count_loans(loan_str):
+    if pd.isna(loan_str) or not isinstance(loan_str, str):
+        return np.nan
+    # Remove 'and' and split by comma
+    loan_list = [x.strip().lower() for x in re.sub(r'\band\b', ',', loan_str, flags=re.IGNORECASE).split(',')]
+    # Filter out empty strings and count
+    loan_list = [loan for loan in loan_list if loan]
+    return int(len(loan_list))
+
+def count_distinct_loans(loan_str):
+    def split_loans(loan_str):
+        if pd.isna(loan_str):
+            return []
+        parts = re.sub(r"\band\b", ",", loan_str, flags=re.IGNORECASE).split(",")
+        cleaned = [p.strip() for p in parts if p.strip()]
+        return cleaned
+    loans = split_loans(loan_str)
+    return Counter(loans)
+
+def parse_credit_history_age(val):
+    if pd.isna(val):
+        return np.nan
+    match = re.search(r"(\d+)\s*Years?\s*and\s*(\d+)\s*Months?", str(val))
+    if match:
+        years = int(match.group(1))
+        months = int(match.group(2))
+        return round(years + months / 12, 2)
+    # Fallback if only years or only months are present
+    match_years = re.search(r"(\d+)\s*Years?", str(val))
+    match_months = re.search(r"(\d+)\s*Months?", str(val))
+    years = int(match_years.group(1)) if match_years else 0
+    months = int(match_months.group(1)) if match_months else 0
+    return round(years + months / 12, 2)
 
 def process_silver_table_feature_financials(bronze_feature_financials : str, silver_table_dir : str, date : str, spark : SparkSession):
     """
-    Process Feature finanicals
+    Process Feature finanicals,
+    special case read as csv
     """
-    df = spark.read.csv(bronze_feature_financials, header=True, inferSchema=True)
-    print(f"Loaded {bronze_feature_financials}, row count {df.count()}")
+    all_loan_types = {'Not Specified', 
+                      'Personal Loan', 
+                      'Mortgage Loan', 
+                      'Payday Loan', 
+                      'Credit-Builder Loan', 
+                      'Home Equity Loan',
+                      'Debt Consolidation Loan', 
+                      'Auto Loan', 
+                      'Student Loan'}
 
-    column_type_map = {
-        "Customer_ID": StringType(),
-        "Annual_Income": FloatType(),
-        "Monthly_Inhand_Salary": FloatType(),
-        "Num_Bank_Accounts": IntegerType(),
-        "Num_Credit_Card": IntegerType(),
-        "Interest_Rate": IntegerType(),
-        "Num_of_Loan": IntegerType(), # Has weird values, need to handle 
-        "Type_of_Loan": StringType(),  # List-like string, can parse later
-        "Delay_from_due_date": IntegerType(),
-        "Num_of_Delayed_Payment": IntegerType(),
-        "Changed_Credit_Limit": FloatType(),
-        "Num_Credit_Inquiries": FloatType(),
-        "Credit_Mix": StringType(),  # e.g. "Bad", "Good", etc.
-        "Outstanding_Debt": FloatType(),
-        "Credit_Utilization_Ratio": FloatType(),
-        "Credit_History_Age": FloatType(),  # Date is in Year and months, need to parse
-        "Payment_of_Min_Amount": StringType(),  # "Yes"/"No"
-        "Total_EMI_per_month": FloatType(),
-        "Amount_invested_monthly": FloatType(),
-        "Payment_Behaviour": StringType(),  # Categorical, need more information to determine whether to remain categorical or ordinal
-        "Monthly_Balance": FloatType(),
-        "snapshot_date": DateType()
-    }
+    # Read the bronze file
+    df = pd.read_csv(bronze_feature_financials, dtype=str)
+    print(f"Loaded {bronze_feature_financials}, row count {len(df)}")
 
-    for column, new_type in column_type_map.items():
-        if column == "Type_of_Loan":
-            df = df.withColumn(column, parse_type_of_loan_udf(col(column)).cast(new_type))
-        elif column == "Credit_Mix":
-            df = df.withColumn(column, parse_credit_mix_udf(col(column)).cast(new_type))
-        elif column == "Credit_History_Age":
-            df = df.withColumn(column, parse_credit_history_age_udf(col(column)).cast(new_type))
-        elif column == "Payment_of_Min_Amount":
-            df = df.withColumn(column, parse_payment_min_amount_udf(col(column)).cast(new_type))
-        elif column == "Changed_Credit_Limit":
-            df = df.withColumn(column, parse_changed_credit_limit_udf(col(column)).cast(new_type))
-        # Need to fix the values
-        elif new_type == IntegerType():
-            df = df.withColumn(column, parse_int_udf(col(column)).cast(new_type))
-        elif new_type == FloatType():
-            df = df.withColumn(column, parse_float_udf(col(column)).cast(new_type))
-        else:
-            df = df.withColumn(column, col(column).cast(new_type))
+    # We then try to clean the data by trying to save some of the values
+    df['Annual_Income'] = df["Annual_Income"].astype(str).apply(extract_float)
+    df['Monthly_Inhand_Salary'] = df["Monthly_Inhand_Salary"].astype(str).apply(extract_float)
+    df['Num_Bank_Accounts'] = df["Num_Bank_Accounts"].astype(str).apply(extract_int)
+    df['Num_Credit_Card'] = df["Num_Credit_Card"].astype(str).apply(extract_int)
+    df['Interest_Rate'] = df["Interest_Rate"].astype(str).apply(extract_float)
+    df['Num_of_Loan'] = df["Num_of_Loan"].astype(str).apply(extract_int)
+    df['Delay_from_due_date'] = df["Delay_from_due_date"].astype(str).apply(extract_int)
+    df['Num_of_Delayed_Payment'] = df["Num_of_Delayed_Payment"].astype(str).apply(extract_int)
+    df['Changed_Credit_Limit'] = df["Changed_Credit_Limit"].astype(str).apply(extract_float)
+    df['Outstanding_Debt'] = df["Outstanding_Debt"].astype(str).apply(extract_float)
+    df['Credit_Utilization_Ratio'] = df["Credit_Utilization_Ratio"].astype(str).apply(extract_float)
+    df['Credit_History_Age'] = df["Credit_History_Age"].astype(str).apply(parse_credit_history_age)
+    df['Total_EMI_per_month'] = df["Total_EMI_per_month"].astype(str).apply(extract_float)
+    df['Amount_invested_monthly'] = df["Amount_invested_monthly"].astype(str).apply(extract_float)
+    df['Monthly_Balance'] = df["Monthly_Balance"].astype(str).apply(extract_float)
 
-    # We can do some repair on the number of loans by checking the values from the loan types
-    # and replacing the value inside depending on the number of loans
-    df = df.withColumn("Num_of_Loan", get_true_number_of_loan_udf(col("Type_of_Loan")).cast(IntegerType()))
+    # We fix the empty values in credit mix
+    df['Credit_Mix'] = df['Credit_Mix'].replace(to_replace=r'^_+$', value='Unknown', regex=True)
 
-    # We need to remove any anomalous values within the dataset
-    # Preseeded some None values so we can remove that first
+
+    # We can try to count the number of loans to try to save them
+    df["Num_of_Loan"] = df["Type_of_Loan"].apply(count_loans).astype("Int64")
+    df["Payment_Behaviour"] = df["Payment_Behaviour"].apply(
+        lambda x: x if pd.notna(x) and "payment" in x.lower() else "Unknown"
+    )
+    
+    # We can make new columns to turn boolean types into unique boolean variables
+    for loan in all_loan_types:
+        df[loan] = df["Type_of_Loan"].apply(lambda x: count_distinct_loans(x)[loan])
+
+    # Drop any rows with NA values
     df = df.dropna()
 
-    # Remove anomalous data based on certain values
-    # e.g. > 50 credit cards, more than 50 loans, CUS_0x1140 where monthly salary 914 but yearly salary is 14 millions
-    # df = df.filter(col("Outstanding_Debt") >= 0)
-    print("---------Filtering Anomalous Data------------")
-    df = df.filter(col("Annual_Income") >= 0)
-    df = df.filter(col("Monthly_Inhand_Salary") >= 0)
-    df = df.filter((col("Num_Bank_Accounts") <= 20) & (col("Num_Bank_Accounts") > 0))
-    df = df.filter((col("Num_Credit_Card") <= 20) & (col("Num_Credit_Card") >= 0))
-    df = df.filter((col("Num_of_Loan") <= 20) & (col("Num_of_Loan") >= 0))
-    df = df.filter((col("Interest_Rate") <= 600) & (col("Interest_Rate") >= 0)) # According to online, max rating is ~600%
-    df = df.filter((col("Monthly_Inhand_Salary") * 24 < col("Annual_Income")))
+    # We also filter anomalous data
+    df = df[df["Annual_Income"] >= 0]
+    df = df[df["Monthly_Inhand_Salary"] >= 0]
+    df = df[(df["Num_Bank_Accounts"] <= 20) & (df["Num_Bank_Accounts"] > 0)]
+    df = df[(df["Num_Credit_Card"] <= 20) & (df["Num_Credit_Card"] >= 0)]
+    df = df[(df["Num_of_Loan"] <= 20) & (df["Num_of_Loan"] >= 0)]
 
-    # Remove filter columns, then change loan type to counter column
-    print("---------Extracting Loan Data------------")
-    # df_split = df.withColumn("loan_type_array", split("Type_of_Loan", ","))
-    # df_exploded = df_split.withColumn("loan_type", explode("loan_type_array"))
-    # df_normalized = df_exploded.withColumn("loan_type", trim(lower("loan_type")))
-    # df_normalized.show(10)
-    # loan_types = [row.loan_type for row in df_normalized.select("loan_type").distinct().collect()]
-
-    # for loan in loan_types:
-    #     df = df.withColumn(
-    #         loan,
-    #         when(lower(col("Type_of_Loan")).contains(loan), 1).otherwise(0)
-    #     )
-    
-    # We then can count the number of each time of loan based off the Num_of_loan column
-
-    # save silver table - IRL connect to database to write
-    print("---------Writing Pandas File------------")
-    df.show(5)
-    partition_name = "silver_feature_finanicals_" + date + '.csv'
+    # Save the partitiion
+    partition_name = "silver_feature_financals_" + date + ".csv"
     filepath = os.path.join(silver_table_dir, partition_name)
-
-    df.toPandas().to_csv(filepath, index=False)
-    print('saved to:', filepath)
+    print("Saving file : {} row count {}".format(filepath, len(df)))
+    df.to_csv(filepath, index=False)
     
-    return df
+"""
+Silver Feature Clickstream
+"""
 
 def process_silver_table_features_clickstream(bronze_feature_clickstream : str, silver_table_dir : str, date : str, spark : SparkSession):
     """
@@ -297,36 +244,35 @@ def process_silver_table_features_clickstream(bronze_feature_clickstream : str, 
     partition_name = "silver_feature_clickstream_" + date + '.csv'
     filepath = os.path.join(silver_table_dir, partition_name)
 
-    df.toPandas().to_csv(filepath)
-    print('saved to:', filepath)
+    print("Saving File {} row count {}".format(filepath, df.count()))
+
+    # Convert PySpark DataFrame to pandas and save as CSV
+    df.toPandas().to_csv(filepath, index=False)
+
+"""
+Silver Feature Attributes
+"""
 
 def process_silver_table_features_attributes(bronze_feature_attributes : str, silver_table_dir : str, date : str, spark : SparkSession):
     """
     Process Feature Attributes
+    Dealing with String Again so need to cast to csv
     """
-    df = spark.read.csv(bronze_feature_attributes, header=True, inferSchema=True)
+    df = pd.read_csv(bronze_feature_attributes, dtype=str)
     print(f"Loaded {bronze_feature_attributes}, row count {df.count()}")
 
-    column_type_map = {
-        "Customer_ID": StringType(),
-        "Name": StringType(),
-        "Age": IntegerType(),
-        "SSN": StringType(),
-        "Occupation": StringType(),
-        "snapshot_date": DateType()
-    }
+    # Clean the numerical data
+    df['Age'] = df["Age"].astype(str).apply(extract_int)
 
-    for column, new_type in column_type_map.items():
-        if new_type == IntegerType():
-            df = df.withColumn(column, parse_int_udf(col(column)).cast(new_type))
-        if column == "Occupation":
-            df = df.withColumn(column, parse_occupation_udf(col(column)).cast(new_type))
-        else:
-            df = df.withColumn(column, col(column).cast(new_type))
+    # Clean occupation
+    df.loc[df['Occupation'].str.fullmatch(r'_+'), 'Occupation'] = 'Unknown'
     
+    # Drop Unknowns
+    df = df.drop(columns=["SSN"])
+    df = df.dropna()
+
     # save silver table - IRL connect to database to write
     partition_name = "silver_feature_attributes_" + date + '.csv'
     filepath = os.path.join(silver_table_dir, partition_name)
-
-    df.toPandas().to_csv(filepath)
-    print('saved to:', filepath)
+    print("Saving file : {} row count {}".format(filepath, len(df)))
+    df.to_csv(filepath, index=False)
