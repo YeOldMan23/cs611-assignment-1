@@ -196,7 +196,7 @@ def process_silver_table_feature_financials(bronze_feature_financials : str, sil
     df = df[(df["Num_of_Loan"] <= 20) & (df["Num_of_Loan"] >= 0)]
 
     # Save the partitiion
-    partition_name = "silver_feature_financals_" + date + ".csv"
+    partition_name = "silver_feature_financials_" + date + ".csv"
     filepath = os.path.join(silver_table_dir, partition_name)
     print("Saving file : {} row count {}".format(filepath, len(df)))
     df.to_csv(filepath, index=False)

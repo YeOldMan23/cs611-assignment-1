@@ -8,10 +8,12 @@ from pyspark.sql import SparkSession
 
 from utils.data_preprocessing_bronze_table import *
 from utils.data_preprocessing_silver_table import *
+from utils.data_preprocessing_gold_table import *
 from utils.helper import *
 
-current_directory = os.path.dirname(os.path.abspath(__file__))
+current_directory = os.path.dirname(os.path.abspath(os.path.join(os.getcwd(), "cs611-assignment-1")))
 csv_dir = os.path.join(current_directory, "data")
+print(current_directory)
 
 # Other parts
 data_mart_dir = os.path.join(current_directory, "datamart")
@@ -19,17 +21,11 @@ bronze_dir = os.path.join(data_mart_dir, "bronze")
 silver_dir = os.path.join(data_mart_dir, "silver")
 gold_dir = os.path.join(data_mart_dir, "gold")
 
-# Refresh current directory
-if os.path.exists(data_mart_dir):
-    shutil.rmtree(data_mart_dir)
-
-os.mkdir(data_mart_dir)
-os.mkdir(bronze_dir)
-os.mkdir(silver_dir)
-os.mkdir(gold_dir)
-
-def data_prep(snapshotdate, start_date, end_date, spark : SparkSession):
-    print('\n\n---starting job---\n\n')
+"""
+Bronze Feature Function
+"""
+def data_prep_bronze(start_date, end_date, spark : SparkSession):
+    print('\n\n---starting Bronze Table job---\n\n')
 
     # Get all the datetimes 
     dates_str_list = generate_first_of_month_dates(start_date, end_date)
@@ -41,34 +37,75 @@ def data_prep(snapshotdate, start_date, end_date, spark : SparkSession):
     for csv_file in csv_files:
         csv_full_dir = os.path.join(csv_dir, csv_file)
         for date_str in dates_str_list:
+            print("Preparing bronze table {}".format(csv_file))
             prepare_bronze_table_daily(csv_full_dir, bronze_dir, spark, date_str)
 
-    # Now we can prepare the silver
-    for csv_file in csv_files:
-        csv_full_dir = os.path.join(csv_dir, csv_file)
-        csv_type = csv_file.rstrip(".csv")
+"""
+Silver Feature Function
+"""
 
-        if csv_type == "lms_loan_daily":
-            # Get all the lms_loan_daily files
-            for date_str in dates_str_list:
-                expected_lms_loan_daily_file_name = "bronze_" + csv_type + "_" + date_str + ".csv"
-                expected_full_dir = os.path.join(bronze_dir, expected_lms_loan_daily_file_name)
+def data_prep_silver(start_date, end_date, spark : SparkSession):
+    print('\n\n---starting Silver table job---\n\n')
 
-                process_silver_table_loan_daily(expected_full_dir,
+    # Get all the datetimes 
+    dates_str_list = generate_first_of_month_dates(start_date, end_date)
+
+    # We can build the silver table
+    for date_str in dates_str_list:
+        # Build the silver table for each csv
+        expected_lms_loan_daily_file_name = "bronze_lms_loan_daily_" + date_str + ".csv"
+        expected_loan_full_dir = os.path.join(bronze_dir, expected_lms_loan_daily_file_name)
+
+        process_silver_table_loan_daily(expected_loan_full_dir,
+                                        silver_dir,
+                                        date_str,
+                                        spark)
+        
+        expected_feature_financials_file_name = "bronze_features_financial_" + date_str + ".csv"
+        expected_financial_full_dir = os.path.join(bronze_dir, expected_feature_financials_file_name)
+
+        process_silver_table_feature_financials(expected_financial_full_dir,
                                                 silver_dir,
                                                 date_str,
                                                 spark)
-                
-        elif csv_type == "feature_finanicals":
-            # Get all feature_financials files
-            for date_str in dates_str_list:
-                expected_feature_financials_file_name = "bronze_" + csv_type + "_" + date_str + ".csv"
-                expected_full_dir = os.path.join(bronze_dir, expected_feature_financials_file_name)
+        
+        expected_feature_attributes_file_name = "bronze_features_attribute_" + date_str + ".csv"
+        expected_feature_attributes_full_dir = os.path.join(bronze_dir, expected_feature_attributes_file_name)
 
-                process_silver_table_feature_financials(expected_full_dir,
-                                                        silver_dir,
-                                                        date_str,
-                                                        spark)
+        process_silver_table_features_attributes(expected_feature_attributes_full_dir,
+                                                 silver_dir,
+                                                 date_str,
+                                                 spark)
+        
+        expected_feature_clickstream_file_name = "bronze_feature_clickstream_" + date_str + ".csv"
+        expected_feature_clickstream_full_dir = os.path.join(bronze_dir, expected_feature_clickstream_file_name)
+
+        process_silver_table_features_clickstream(expected_feature_clickstream_full_dir,
+                                                  silver_dir,
+                                                  date_str,
+                                                  spark)
+        
+
+"""
+Gold Feature Function
+"""
+
+def data_prep_gold(start_date, end_date, spark : SparkSession):
+    print('\n\n---starting Gold table job---\n\n')
+
+    dates_str_list = generate_first_of_month_dates(start_date, end_date)
+
+    # We can build the silver table
+    for date_str in dates_str_list:
+        # Prepare the gold labels
+        label_df = process_labels_gold_table(date_str, silver_dir, gold_dir, spark, dpd = 30, mob = 6)
+
+        # Prepare the gold features
+        features_df = process_features_gold_table(date_str, silver_dir, gold_dir, spark)
+
+    return label_df, features_df
+
+
 
 
 if __name__ == "__main__":
@@ -79,6 +116,26 @@ if __name__ == "__main__":
     parser.add_argument("--end_date", default="2024-12-01", type=str, required=True, help="YYYY-MM-DD")
 
     args = parser.parse_args()
+
+    # Build File directories first
+    current_directory = os.path.dirname(os.path.abspath(os.path.join(os.getcwd(), "cs611-assignment-1")))
+    csv_dir = os.path.join(current_directory, "data")
+    print(current_directory)
+
+    # Other parts
+    data_mart_dir = os.path.join(current_directory, "datamart")
+    bronze_dir = os.path.join(data_mart_dir, "bronze")
+    silver_dir = os.path.join(data_mart_dir, "silver")
+    gold_dir = os.path.join(data_mart_dir, "gold")
+
+    # Refresh current directory
+    if os.path.exists(data_mart_dir):
+        shutil.rmtree(data_mart_dir)
+
+    os.mkdir(data_mart_dir)
+    os.mkdir(bronze_dir)
+    os.mkdir(silver_dir)
+    os.mkdir(gold_dir)
     
     # Call main with arguments explicitly passed
     # Initialize SparkSession
@@ -90,4 +147,9 @@ if __name__ == "__main__":
     # Set log level to ERROR to hide warnings
     spark.sparkContext.setLogLevel("ERROR")
 
-    data_prep(args.snapshotdate, args.start_date, args.end_date, spark)
+    # Run the entire chan
+    data_prep_bronze(args.start_date, args.end_date, spark)
+    data_prep_silver(args.start_date, args.end_date, spark)
+    data_prep_gold(args.start_date, args.end_date, spark)
+
+    print("---------JOB COMPLETE---------")
