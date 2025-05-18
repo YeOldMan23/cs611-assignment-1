@@ -111,11 +111,13 @@ def data_prep_gold(start_date, end_date, spark : SparkSession):
 if __name__ == "__main__":
     # Setup argparse to parse command-line arguments
     parser = argparse.ArgumentParser(description="run job")
-    parser.add_argument("--snapshotdate", default="2023-01-01", type=str, required=True, help="YYYY-MM-DD")
-    parser.add_argument("--start_date", default="2023-01-01", type=str, required=True, help="YYYY-MM-DD")
-    parser.add_argument("--end_date", default="2024-12-01", type=str, required=True, help="YYYY-MM-DD")
+    parser.add_argument("--snapshotdate", default="2023-01-01", type=str, help="YYYY-MM-DD")
+    parser.add_argument("--start_date", default="2023-01-01", type=str, help="YYYY-MM-DD")
+    parser.add_argument("--end_date", default="2024-12-01", type=str, help="YYYY-MM-DD")
 
     args = parser.parse_args()
+
+    print(f"Making Datamart, Start Date {args.start_date} End Date {args.end_date}")
 
     # Build File directories first
     current_directory = os.path.dirname(os.path.abspath(os.path.join(os.getcwd(), "cs611-assignment-1")))
