@@ -2,7 +2,6 @@ import os
 import shutil
 import argparse
 from datetime import datetime
-from tqdm import tqdm
 
 import pyspark
 from pyspark.sql import SparkSession
@@ -100,7 +99,7 @@ def data_prep_gold(start_date, end_date, spark : SparkSession):
     features_df = None
 
     # We can build the silver table
-    for date_str in tqdm(dates_str_list):
+    for date_str in dates_str_list:
         # Prepare the gold labels
         if label_df:
             cur_label_df = process_labels_gold_table(date_str, silver_dir, gold_dir, spark, dpd = 60, mob = 7)
