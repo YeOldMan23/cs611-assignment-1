@@ -54,6 +54,11 @@ def process_features_gold_table(snapshot_date_str, silver_dir, gold_feature_stor
     print('loaded from:', silver_features_attributes, 'row count:', fa_df.count())
     print('loaded from:', silver_features_clickstream, 'row count:', fc_df.count())
 
+    # Drop the snapshot dates
+    ff_df = ff_df.drop('snapshot_date')
+    fa_df = fa_df.drop('snapshot_date')
+    fc_df = fc_df.drop('snapshot_date')
+
     # Merge the 3 datasets by date to correspond to the label store
     # Feature clickstream is the cleanest dataset, followed by attributes then finally the financials 
     df_joined_1 = fc_df.join(fa_df, on="Customer_ID", how="inner")

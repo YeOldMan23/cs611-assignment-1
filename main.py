@@ -98,7 +98,7 @@ def data_prep_gold(start_date, end_date, spark : SparkSession):
     # We can build the gold table
     for date_str in dates_str_list:
         # Prepare the gold labels
-        label_df = process_labels_gold_table(date_str, silver_dir, gold_dir, spark, dpd = 30, mob = 6)
+        label_df = process_labels_gold_table(date_str, silver_dir, gold_dir, spark, dpd = 60, mob = 7)
 
         # Prepare the gold features
         features_df = process_features_gold_table(date_str, silver_dir, gold_dir, spark)
