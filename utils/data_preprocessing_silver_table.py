@@ -174,7 +174,6 @@ def process_silver_table_feature_financials(bronze_feature_financials : str, sil
     # We fix the empty values in credit mix
     df['Credit_Mix'] = df['Credit_Mix'].replace(to_replace=r'^_+$', value='Unknown', regex=True)
 
-
     # We can try to count the number of loans to try to save them
     df["Num_of_Loan"] = df["Type_of_Loan"].apply(count_loans).astype("Int64")
     df["Payment_Behaviour"] = df["Payment_Behaviour"].apply(
@@ -266,10 +265,17 @@ def process_silver_table_features_attributes(bronze_feature_attributes : str, si
 
     # Clean occupation
     df.loc[df['Occupation'].str.fullmatch(r'_+'), 'Occupation'] = 'Unknown'
+    df['SSN'] = df['SSN'].where(df['SSN'].str.match(r'^\d{3}-\d{2}-\d{4}$'), 'Unknown')
+
+    # Make new column has SSN
+    df['has_SSN'] = (df['SSN'] != 'Unknown').astype(int)
     
     # Drop Unknowns
     df = df.drop(columns=["SSN"])
     df = df.dropna()
+    
+    # Filter anomalous values
+    df = df[(df["Age"] <= 100) & (df["Age"] > 0)]
 
     # save silver table - IRL connect to database to write
     partition_name = "silver_feature_attributes_" + date + '.csv'
