@@ -2,6 +2,7 @@ import os
 import shutil
 import argparse
 from datetime import datetime
+from tqdm import tqdm
 
 import pyspark
 from pyspark.sql import SparkSession
@@ -95,16 +96,40 @@ def data_prep_gold(start_date, end_date, spark : SparkSession):
 
     dates_str_list = generate_first_of_month_dates(start_date, end_date)
 
-    # We can build the gold table
-    for date_str in dates_str_list:
+    label_df = None
+    features_df = None
+
+    # We can build the silver table
+    for date_str in tqdm(dates_str_list):
         # Prepare the gold labels
-        label_df = process_labels_gold_table(date_str, silver_dir, gold_dir, spark, dpd = 60, mob = 7)
+        if label_df:
+            cur_label_df = process_labels_gold_table(date_str, silver_dir, gold_dir, spark, dpd = 60, mob = 7)
+            label_df = label_df.unionByName(cur_label_df)
+        else:
+            label_df = process_labels_gold_table(date_str, silver_dir, gold_dir, spark, dpd = 60, mob = 7)
 
         # Prepare the gold features
-        features_df = process_features_gold_table(date_str, silver_dir, gold_dir, spark)
+        if features_df:
+            cur_feature_df = process_features_gold_table(date_str, silver_dir, gold_dir, spark)
+            features_df = features_df.unionByName(cur_feature_df)
+        else:
+            features_df = process_features_gold_table(date_str, silver_dir, gold_dir, spark)
+
+    # Save the data
+    current_date = datetime.now().strftime("%Y-%m-%d")
+
+    label_name = f"snapdate_{current_date}_" + "gold_label_store" + start_date + "to" + end_date + ".csv"
+    label_filepath = os.path.join(gold_dir, label_name)
+    label_df.toPandas().to_csv(label_filepath, index=False)
+    print('labels saved to : ', label_filepath, " row count : ", label_df.count())
+
+    feature_name = f"snapdate_{current_date}_" + "gold_feature_store" + start_date + "to" + end_date + ".csv"
+    feature_filepath = os.path.join(gold_dir, feature_name)
+    features_df.toPandas().to_csv(feature_filepath, index=False)
+    print(f"saved to : {feature_filepath}, row count : {features_df.count()}")
+
 
     return label_df, features_df
-
 
 
 

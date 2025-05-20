@@ -7,7 +7,7 @@ import numpy as np
 
 import pyspark.sql.functions as F
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, greatest, to_date
 from pyspark.sql.types import StringType, IntegerType, FloatType, DateType
 
 def process_labels_gold_table(snapshot_date_str, silver_loan_daily_directory, gold_label_store_directory, spark : SparkSession, dpd, mob):
@@ -32,10 +32,6 @@ def process_labels_gold_table(snapshot_date_str, silver_loan_daily_directory, go
 
     # save gold table - IRL connect to database to write
     partition_name = f"snapdate_{current_date}_" + "gold_label_store_" + snapshot_date_str.replace('-','_') + '.csv'
-    filepath = os.path.join(gold_label_store_directory, partition_name)
-    
-    df.toPandas().to_csv(filepath, index=False)
-    print('saved to:', filepath)
     
     return df
 
@@ -54,20 +50,27 @@ def process_features_gold_table(snapshot_date_str, silver_dir, gold_feature_stor
     print('loaded from:', silver_features_attributes, 'row count:', fa_df.count())
     print('loaded from:', silver_features_clickstream, 'row count:', fc_df.count())
 
-    # Drop the snapshot dates
-    ff_df = ff_df.drop('snapshot_date')
-    fa_df = fa_df.drop('snapshot_date')
-    fc_df = fc_df.drop('snapshot_date')
+    # Find the latest snapshot date afterwards
+    ff_df = ff_df.withColumnRenamed("snapshot_date", "snapshot_date_1")
+    ff_df = ff_df.withColumn("snapshot_date_1", to_date("snapshot_date_1"))
+
+    fa_df = fa_df.withColumnRenamed("snapshot_date", "snapshot_date_2")
+    fa_df = fa_df.withColumn("snapshot_date_2", to_date("snapshot_date_2"))
+
+    fc_df = fc_df.withColumnRenamed("snapshot_date", "snapshot_date_3")
+    fc_df = fc_df.withColumn("snapshot_date_3", to_date("snapshot_date_3"))
 
     # Merge the 3 datasets by date to correspond to the label store
     # Feature clickstream is the cleanest dataset, followed by attributes then finally the financials 
     df_joined_1 = fc_df.join(fa_df, on="Customer_ID", how="inner")
     final_df = df_joined_1.join(ff_df, on="Customer_ID", how="inner")
 
-    # Save the final file
-    partition_name = f"snapdate_{current_date}_" + "gold_feature_store_" + snapshot_date_str + '.csv'
-    full_partition_path = os.path.join(gold_feature_store_directory, partition_name)
-    final_df.toPandas().to_csv(full_partition_path, index=False)
-    print(f"saved to : {full_partition_path}, row count : {final_df.count()}")
+    final_df = final_df.withColumn(
+        "snapshot_date",
+        greatest("snapshot_date_1", "snapshot_date_2", "snapshot_date_3")
+    )
+    final_df = final_df.drop("snapshot_date_1", "snapshot_date_2", "snapshot_date_3")
+
+    print("Final Row Count : ", final_df.count())
 
     return final_df
