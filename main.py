@@ -109,10 +109,10 @@ def data_prep_gold(start_date, end_date, spark : SparkSession):
 
         # Prepare the gold features
         if features_df:
-            cur_feature_df = process_features_gold_table(date_str, silver_dir, gold_dir, spark)
+            cur_feature_df = process_features_gold_table(date_str, silver_dir, start_date, end_date, spark)
             features_df = features_df.unionByName(cur_feature_df)
         else:
-            features_df = process_features_gold_table(date_str, silver_dir, gold_dir, spark)
+            features_df = process_features_gold_table(date_str, silver_dir, start_date, end_date, spark)
 
     # Save the data
     current_date = datetime.now().strftime("%Y-%m-%d")
